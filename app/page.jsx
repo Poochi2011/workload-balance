@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend, AreaChart, Area, LineChart, Line } from "recharts";
+import { createClient } from "@supabase/supabase-js";
 
 // ═══════════════════════════════════════════════════════════════
 //  GLOBAL CSS
@@ -200,6 +201,42 @@ const notify = (msg, type = "success") => {
   _setN(p => [...p.slice(-2), { id, msg, type }]);
   setTimeout(() => _setN(p => p.filter(n => n.id !== id)), 3900);
 };
+
+// ═══════════════════════════════════════════════════════════════
+//  SUPABASE CLIENT + DATA HELPERS
+// ═══════════════════════════════════════════════════════════════
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
+
+// DB row → local shape mappers
+const mapTeam = r => ({ id: r.id, name: r.name, description: r.description || "", color: r.color || "#4fa3ff", emoji: r.emoji || "🏗️" });
+const mapEmployee = r => ({ id: r.id, name: r.name, role: r.role || "", team: r.team_id, capacity: r.capacity || 40, skills: r.skills || [], avatar: r.avatar || r.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2), email: r.email || "", location: r.location || "", joined: r.joined || new Date().toISOString().slice(0, 10) });
+const mapTask = r => ({ id: r.id, title: r.title, desc: r.description || "", hours: r.hours || 0, priority: r.priority || "medium", status: r.status || "todo", employeeId: r.employee_id, teamId: r.team_id, due: r.due || "", created: r.created_at ? r.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10) });
+
+// Seed demo data for brand-new users
+async function seedUserData(userId) {
+  const { data: teams } = await supabase.from("teams").insert(
+    SEED_TEAMS.map(({ id, ...t }) => ({ ...t, user_id: userId }))
+  ).select();
+  if (!teams) return;
+  const teamIdMap = {};
+  teams.forEach((t, i) => { teamIdMap[SEED_TEAMS[i].id] = t.id; });
+  const { data: emps } = await supabase.from("employees").insert(
+    SEED_EMPLOYEES.map(({ id, team, ...e }) => ({ ...e, user_id: userId, team_id: teamIdMap[team] || teams[0].id }))
+  ).select();
+  if (!emps) return;
+  const empIdMap = {};
+  emps.forEach((e, i) => { empIdMap[SEED_EMPLOYEES[i].id] = e.id; });
+  await supabase.from("tasks").insert(
+    SEED_TASKS.map(({ id, employeeId, teamId, desc, created, ...t }) => ({
+      ...t, description: desc, user_id: userId,
+      employee_id: empIdMap[employeeId] || null,
+      team_id: teamIdMap[teamId] || null,
+    }))
+  );
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  ATOMIC COMPONENTS
@@ -721,28 +758,32 @@ function AuthPage({ mode: initMode, onAuth, onLanding }) {
   const submit = async () => {
     if (!validate()) return;
     setLoading(true);
-    await new Promise(r => setTimeout(r, 900));
-    setLoading(false);
 
-    // Owner backdoor — instant full access
+    // Owner backdoor — instant full access, no Supabase
     const isOwner = form.name.trim().toLowerCase() === OWNER.name.toLowerCase() && form.password === OWNER.password;
     if (isOwner) {
+      setLoading(false);
       onAuth({ id: 0, name: "Rihaan", email: "owner@workloadbalance.io", role: "admin", org: "WorkloadBalance", plan: "enterprise", paid: true, signupDate: "2025-01-01", avatar: "RH" });
       notify("Welcome back, Rihaan 👋", "success");
       return;
     }
 
-    // Regular signup — starts 7-day trial
     if (mode === "signup") {
-      const name = form.name.trim();
-      onAuth({ id: Date.now(), name, email: form.email, role: form.role, org: form.org, plan: null, paid: false, signupDate: new Date().toISOString(), avatar: name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) });
+      const { error } = await supabase.auth.signUp({
+        email: form.email,
+        password: form.password,
+        options: { data: { name: form.name.trim(), role: form.role, org: form.org.trim() } },
+      });
+      setLoading(false);
+      if (error) { setErrors({ email: error.message }); return; }
       notify("Account created! Your 7-day trial has started 🎉", "success");
-      return;
+      // App's onAuthStateChange will fire and load the user
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email: form.email, password: form.password });
+      setLoading(false);
+      if (error) { setErrors({ email: "Invalid email or password." }); return; }
+      // App's onAuthStateChange will fire and load the user
     }
-
-    // Regular login — in production this would verify against your DB
-    // For now show an error for unknown users
-    setErrors({ email: "Account not found. Please sign up first." });
   };
 
   return (
@@ -1141,7 +1182,7 @@ function DashboardPage({ employees, tasks, teams, workloads, onNavigate }) {
 // ═══════════════════════════════════════════════════════════════
 //  TASKS PAGE
 // ═══════════════════════════════════════════════════════════════
-function TasksPage({ tasks, setTasks, employees, teams }) {
+function TasksPage({ tasks, setTasks, employees, teams, userId }) {
   const [open, setOpen] = useState(false);
   const [editTask, setEditTask] = useState(null);
   const [view, setView] = useState("kanban");
@@ -1157,22 +1198,47 @@ function TasksPage({ tasks, setTasks, employees, teams }) {
   const openAdd = () => { setEditTask(null); setForm({ title: "", desc: "", hours: "", priority: "medium", employeeId: "", teamId: "", due: "", status: "todo" }); setOpen(true); };
   const openEdit = t => { setEditTask(t); setForm({ title: t.title, desc: t.desc, hours: String(t.hours), priority: t.priority, employeeId: String(t.employeeId), teamId: String(t.teamId), due: t.due, status: t.status }); setOpen(true); };
 
-  const save = () => {
+  const save = async () => {
     if (!form.title || !form.employeeId) return;
     const emp = employees.find(e => e.id === Number(form.employeeId));
-    const payload = { ...form, hours: Number(form.hours), employeeId: Number(form.employeeId), teamId: Number(emp?.team || form.teamId) };
-    if (editTask) {
-      setTasks(prev => prev.map(t => t.id === editTask.id ? { ...t, ...payload } : t));
-      notify("Task updated successfully", "success");
+    if (userId && userId !== 0) {
+      const payload = {
+        user_id: userId, title: form.title, description: form.desc,
+        hours: Number(form.hours), priority: form.priority, status: form.status,
+        employee_id: Number(form.employeeId), team_id: Number(emp?.team || form.teamId),
+        due: form.due || null,
+      };
+      if (editTask) {
+        const { data, error } = await supabase.from("tasks").update(payload).eq("id", editTask.id).select().single();
+        if (!error && data) setTasks(prev => prev.map(t => t.id === editTask.id ? mapTask(data) : t));
+        notify("Task updated successfully", "success");
+      } else {
+        const { data, error } = await supabase.from("tasks").insert(payload).select().single();
+        if (!error && data) setTasks(prev => [...prev, mapTask(data)]);
+        notify("Task created", "success");
+      }
     } else {
-      setTasks(prev => [...prev, { id: Date.now(), ...payload, created: new Date().toISOString().slice(0, 10) }]);
-      notify("Task created", "success");
+      const payload = { ...form, hours: Number(form.hours), employeeId: Number(form.employeeId), teamId: Number(emp?.team || form.teamId) };
+      if (editTask) {
+        setTasks(prev => prev.map(t => t.id === editTask.id ? { ...t, ...payload } : t));
+        notify("Task updated successfully", "success");
+      } else {
+        setTasks(prev => [...prev, { id: Date.now(), ...payload, created: new Date().toISOString().slice(0, 10) }]);
+        notify("Task created", "success");
+      }
     }
     setOpen(false);
   };
 
-  const del = id => { setTasks(prev => prev.filter(t => t.id !== id)); notify("Task deleted", "info"); };
-  const setStatus = (id, status) => { setTasks(prev => prev.map(t => t.id === id ? { ...t, status } : t)); };
+  const del = async (id) => {
+    if (userId && userId !== 0) await supabase.from("tasks").delete().eq("id", id).eq("user_id", userId);
+    setTasks(prev => prev.filter(t => t.id !== id));
+    notify("Task deleted", "info");
+  };
+  const setStatus = async (id, status) => {
+    if (userId && userId !== 0) await supabase.from("tasks").update({ status }).eq("id", id);
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, status } : t));
+  };
 
   const parseTasksCsv = e => {
     const file = e.target.files[0]; if (!file) return; e.target.value = "";
@@ -1195,11 +1261,22 @@ function TasksPage({ tasks, setTasks, employees, teams }) {
     };
     reader.readAsText(file);
   };
-  const confirmCsvTasks = () => {
+  const confirmCsvTasks = async () => {
     const valid = csvPreview.filter(r => r._ok);
     if (!valid.length) { notify("No valid rows — employee names must partially match", "error"); return; }
-    const now = Date.now();
-    setTasks(prev => [...prev, ...valid.map((r, i) => ({ id: now + i, title: r.title, desc: r.desc, hours: r.hours, priority: r.priority, status: r.status, due: r.due, employeeId: r.employeeId, teamId: r.teamId, created: new Date().toISOString().slice(0, 10) }))]);
+    if (userId && userId !== 0) {
+      const { data, error } = await supabase.from("tasks").insert(
+        valid.map(r => ({
+          user_id: userId, title: r.title, description: r.desc, hours: r.hours,
+          priority: r.priority, status: r.status, due: r.due || null,
+          employee_id: r.employeeId, team_id: r.teamId,
+        }))
+      ).select();
+      if (!error && data) setTasks(prev => [...prev, ...data.map(mapTask)]);
+    } else {
+      const now = Date.now();
+      setTasks(prev => [...prev, ...valid.map((r, i) => ({ id: now + i, title: r.title, desc: r.desc, hours: r.hours, priority: r.priority, status: r.status, due: r.due, employeeId: r.employeeId, teamId: r.teamId, created: new Date().toISOString().slice(0, 10) }))]);
+    }
     notify(`${valid.length} task${valid.length !== 1 ? "s" : ""} imported`, "success");
     setCsvPreview(null);
   };
@@ -1428,7 +1505,7 @@ function TasksPage({ tasks, setTasks, employees, teams }) {
 // ═══════════════════════════════════════════════════════════════
 //  EMPLOYEES PAGE
 // ═══════════════════════════════════════════════════════════════
-function EmployeesPage({ employees, setEmployees, teams, tasks, workloads }) {
+function EmployeesPage({ employees, setEmployees, teams, tasks, workloads, userId }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const [search, setSearch] = useState("");
@@ -1438,17 +1515,34 @@ function EmployeesPage({ employees, setEmployees, teams, tasks, workloads }) {
   const empCsvRef = useRef();
   const [empCsvPreview, setEmpCsvPreview] = useState(null);
 
-  const add = () => {
+  const add = async () => {
     if (!form.name) return;
     const skills = form.skills.split(",").map(s => s.trim()).filter(Boolean);
     const avatar = form.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
-    setEmployees(prev => [...prev, { id: Date.now(), ...form, team: Number(form.team), capacity: Number(form.capacity), skills, avatar, joined: new Date().toISOString().slice(0, 10) }]);
+    if (userId && userId !== 0) {
+      const { data, error } = await supabase.from("employees").insert({
+        user_id: userId, name: form.name, role: form.role, team_id: Number(form.team),
+        capacity: Number(form.capacity), skills, avatar, email: form.email,
+        location: form.location, joined: new Date().toISOString().slice(0, 10),
+      }).select().single();
+      if (error) { notify("Failed to add employee", "error"); return; }
+      setEmployees(prev => [...prev, mapEmployee(data)]);
+    } else {
+      setEmployees(prev => [...prev, { id: Date.now(), ...form, team: Number(form.team), capacity: Number(form.capacity), skills, avatar, joined: new Date().toISOString().slice(0, 10) }]);
+    }
     setOpen(false);
     setForm({ name: "", role: "", team: 1, capacity: 40, skills: "", email: "", location: "" });
     notify("Employee added", "success");
   };
 
-  const del = id => { setEmployees(prev => prev.filter(e => e.id !== id)); setSelected(null); notify("Employee removed", "info"); };
+  const del = async (id) => {
+    if (userId && userId !== 0) {
+      await supabase.from("employees").delete().eq("id", id).eq("user_id", userId);
+    }
+    setEmployees(prev => prev.filter(e => e.id !== id));
+    setSelected(null);
+    notify("Employee removed", "info");
+  };
 
   const parseEmpCsv = e => {
     const file = e.target.files[0]; if (!file) return; e.target.value = "";
@@ -1472,10 +1566,21 @@ function EmployeesPage({ employees, setEmployees, teams, tasks, workloads }) {
     };
     reader.readAsText(file);
   };
-  const confirmEmpCsv = () => {
+  const confirmEmpCsv = async () => {
     if (!empCsvPreview?.length) return;
-    const now = Date.now();
-    setEmployees(prev => [...prev, ...empCsvPreview.map((r, i) => ({ id: now + i, name: r.name, role: r.role, team: r.team, capacity: r.capacity, skills: r.skills, email: r.email, location: r.location, avatar: r.avatar, joined: new Date().toISOString().slice(0, 10) }))]);
+    if (userId && userId !== 0) {
+      const { data, error } = await supabase.from("employees").insert(
+        empCsvPreview.map(r => ({
+          user_id: userId, name: r.name, role: r.role, team_id: r.team,
+          capacity: r.capacity, skills: r.skills, email: r.email,
+          location: r.location, avatar: r.avatar, joined: new Date().toISOString().slice(0, 10),
+        }))
+      ).select();
+      if (!error && data) setEmployees(prev => [...prev, ...data.map(mapEmployee)]);
+    } else {
+      const now = Date.now();
+      setEmployees(prev => [...prev, ...empCsvPreview.map((r, i) => ({ id: now + i, name: r.name, role: r.role, team: r.team, capacity: r.capacity, skills: r.skills, email: r.email, location: r.location, avatar: r.avatar, joined: new Date().toISOString().slice(0, 10) }))]);
+    }
     notify(`${empCsvPreview.length} employee${empCsvPreview.length !== 1 ? "s" : ""} imported`, "success");
     setEmpCsvPreview(null);
   };
@@ -1673,21 +1778,34 @@ function EmployeesPage({ employees, setEmployees, teams, tasks, workloads }) {
 // ═══════════════════════════════════════════════════════════════
 //  TEAMS PAGE
 // ═══════════════════════════════════════════════════════════════
-function TeamsPage({ teams, setTeams, employees, workloads }) {
+function TeamsPage({ teams, setTeams, employees, workloads, userId }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState({ name: "", description: "", color: "#4fa3ff", emoji: "🏗️" });
   const sf = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  const add = () => {
+  const add = async () => {
     if (!form.name) return;
-    setTeams(prev => [...prev, { id: Date.now(), ...form }]);
+    if (userId && userId !== 0) {
+      const { data, error } = await supabase.from("teams").insert({ ...form, user_id: userId }).select().single();
+      if (error) { notify("Failed to create team", "error"); return; }
+      setTeams(prev => [...prev, mapTeam(data)]);
+    } else {
+      setTeams(prev => [...prev, { id: Date.now(), ...form }]);
+    }
     setOpen(false);
     setForm({ name: "", description: "", color: "#4fa3ff", emoji: "🏗️" });
     notify("Team created", "success");
   };
 
-  const del = id => { setTeams(prev => prev.filter(t => t.id !== id)); setSelected(null); notify("Team removed", "info"); };
+  const del = async (id) => {
+    if (userId && userId !== 0) {
+      await supabase.from("teams").delete().eq("id", id).eq("user_id", userId);
+    }
+    setTeams(prev => prev.filter(t => t.id !== id));
+    setSelected(null);
+    notify("Team removed", "info");
+  };
 
   const COLORS_PALETTE = ["#4fa3ff","#64dc8c","#a78bfa","#ffb340","#ff4646","#06b6d4","#f97316","#ec4899"];
   const EMOJIS = ["⚙️","🎨","📣","🏗️","🔬","📈","🎯","💡","🚀","🛡️"];
@@ -2466,31 +2584,118 @@ export default function App() {
   const [authMode, setAuthMode] = useState("login");
   const [user, setUser] = useState(null);
   const [page, setPage] = useState("dashboard");
-  const [employees, setEmployees] = useState(SEED_EMPLOYEES);
-  const [tasks, setTasks] = useState(SEED_TASKS);
-  const [teams, setTeams] = useState(SEED_TEAMS);
+  const [employees, setEmployees] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [teams, setTeams] = useState([]);
   const [notifs, setNotifs] = useState([]);
+  const [appLoading, setAppLoading] = useState(true);
   _setN = setNotifs;
 
   const workloads = useMemo(() => computeWorkload(employees, tasks), [employees, tasks]);
 
+  const loadUserData = useCallback(async (userId) => {
+    const [{ data: teamsData }, { data: empsData }, { data: tasksData }] = await Promise.all([
+      supabase.from("teams").select("*").eq("user_id", userId).order("id"),
+      supabase.from("employees").select("*").eq("user_id", userId).order("id"),
+      supabase.from("tasks").select("*").eq("user_id", userId).order("id"),
+    ]);
+    const loadedTeams = (teamsData || []).map(mapTeam);
+    if (!loadedTeams.length) {
+      await seedUserData(userId);
+      const [{ data: t2 }, { data: e2 }, { data: k2 }] = await Promise.all([
+        supabase.from("teams").select("*").eq("user_id", userId).order("id"),
+        supabase.from("employees").select("*").eq("user_id", userId).order("id"),
+        supabase.from("tasks").select("*").eq("user_id", userId).order("id"),
+      ]);
+      setTeams((t2 || []).map(mapTeam));
+      setEmployees((e2 || []).map(mapEmployee));
+      setTasks((k2 || []).map(mapTask));
+    } else {
+      setTeams(loadedTeams);
+      setEmployees((empsData || []).map(mapEmployee));
+      setTasks((tasksData || []).map(mapTask));
+    }
+  }, []);
+
+  const loadUserProfile = useCallback(async (supaUser) => {
+    let { data: profile } = await supabase.from("profiles").select("*").eq("id", supaUser.id).single();
+    if (!profile) {
+      const name = supaUser.user_metadata?.name || supaUser.email.split("@")[0];
+      await supabase.from("profiles").insert({ id: supaUser.id, name, plan: "trial", paid: false });
+      profile = { id: supaUser.id, name, plan: "trial", paid: false, signup_date: new Date().toISOString() };
+    }
+    const name = profile.name || supaUser.user_metadata?.name || supaUser.email.split("@")[0];
+    const u = {
+      id: supaUser.id,
+      name,
+      email: supaUser.email,
+      role: supaUser.user_metadata?.role || "admin",
+      org: supaUser.user_metadata?.org || "",
+      plan: profile.plan,
+      paid: profile.paid || false,
+      signupDate: profile.signup_date,
+      avatar: name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2),
+    };
+    setUser(u);
+    await loadUserData(supaUser.id);
+    const trial = getTrialInfo(u.signupDate);
+    if (u.paid) setScreen("app");
+    else if (!trial.expired) { setScreen("app"); notify(`✓ Welcome! ${trial.daysLeft} trial days remaining.`, "info"); }
+    else setScreen("paywall");
+    setAppLoading(false);
+  }, [loadUserData]);
+
+  useEffect(() => {
+    let initialized = false;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        initialized = true;
+        loadUserProfile(session.user);
+      } else {
+        setAppLoading(false);
+      }
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === "SIGNED_IN" && session && !initialized) {
+        initialized = true;
+        await loadUserProfile(session.user);
+      } else if (event === "SIGNED_OUT") {
+        setUser(null); setTeams([]); setEmployees([]); setTasks([]);
+        setScreen("landing"); setPage("dashboard");
+        setAppLoading(false);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [loadUserProfile]);
+
   const goAuth = (mode) => { setAuthMode(mode); setScreen("auth"); };
+  // Used only by owner backdoor path
   const onAuth = (u) => {
-    // For new signups, record today as trial start
     const signupDate = u.signupDate || new Date().toISOString();
     const userWithTrial = { ...u, signupDate, paid: u.paid || false };
     setUser(userWithTrial);
+    setTeams(SEED_TEAMS); setEmployees(SEED_EMPLOYEES); setTasks(SEED_TASKS);
     const trial = getTrialInfo(signupDate);
-    if (userWithTrial.paid) {
-      setScreen("app");
-    } else if (!trial.expired) {
-      setScreen("app"); // within trial window
-      notify(`✓ Welcome! You have ${trial.daysLeft} trial days remaining.`, "info");
-    } else {
-      setScreen("paywall"); // trial expired, must pay
-    }
+    if (userWithTrial.paid) setScreen("app");
+    else if (!trial.expired) { setScreen("app"); notify(`✓ Welcome! You have ${trial.daysLeft} trial days remaining.`, "info"); }
+    else setScreen("paywall");
   };
-  const onLogout = () => { setUser(null); setScreen("landing"); setPage("dashboard"); notify("Signed out", "info"); };
+  const onLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null); setTeams([]); setEmployees([]); setTasks([]);
+    setScreen("landing"); setPage("dashboard");
+    notify("Signed out", "info");
+  };
+
+  if (appLoading) return (
+    <div style={{ minHeight: "100vh", background: "#070810", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <G />
+      <div style={{ textAlign: "center" }}>
+        <div style={{ width: 40, height: 40, border: "3px solid #1e2235", borderTopColor: "#64dc8c", borderRadius: "50%", animation: "spin 0.9s linear infinite", margin: "0 auto 16px" }} />
+        <p style={{ color: "#5c6480", fontSize: 13 }}>Loading your workspace…</p>
+      </div>
+    </div>
+  );
 
   return (
     <>
@@ -2512,9 +2717,9 @@ export default function App() {
             </div>
           ); })()}
           {page === "dashboard" && <DashboardPage employees={employees} tasks={tasks} teams={teams} workloads={workloads} onNavigate={setPage} />}
-          {page === "tasks" && <TasksPage tasks={tasks} setTasks={setTasks} employees={employees} teams={teams} />}
-          {page === "employees" && <EmployeesPage employees={employees} setEmployees={setEmployees} teams={teams} tasks={tasks} workloads={workloads} />}
-          {page === "teams" && <TeamsPage teams={teams} setTeams={setTeams} employees={employees} workloads={workloads} />}
+          {page === "tasks" && <TasksPage tasks={tasks} setTasks={setTasks} employees={employees} teams={teams} userId={user.id} />}
+          {page === "employees" && <EmployeesPage employees={employees} setEmployees={setEmployees} teams={teams} tasks={tasks} workloads={workloads} userId={user.id} />}
+          {page === "teams" && <TeamsPage teams={teams} setTeams={setTeams} employees={employees} workloads={workloads} userId={user.id} />}
           {page === "analytics" && <AnalyticsPage employees={employees} tasks={tasks} teams={teams} workloads={workloads} />}
           {page === "settings" && <SettingsPage user={user} setUser={setUser} />}
         </AppShell>
