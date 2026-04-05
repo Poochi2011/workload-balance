@@ -1,0 +1,1 @@
+export const metadata = { title: 'WorkloadBalance', description: 'Real-time workload visibility for engineering managers.' }; export default function RootLayout({ children }) { return (<html lang='en'><body style={{margin:0}}>{children}</body></html>); }
