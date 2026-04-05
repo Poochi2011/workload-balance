@@ -280,8 +280,8 @@ const RZP_LIVE = true; // Razorpay live
 // Owner backdoor — only you get instant full access
 const OWNER = { name: "Rihaan", password: "pure_vessel" };
 
-// Trial: 14 days free, then payment required
-const TRIAL_DAYS = 14;
+// Trial: 7 days free, then payment required
+const TRIAL_DAYS = 7;
 function getTrialInfo(signupDate) {
   const start = new Date(signupDate);
   const now = new Date();
@@ -352,12 +352,12 @@ function openRazorpay({ plan, billing, user, onSuccess }) {
 // ═══════════════════════════════════════════════════════════════
 const PLANS = [
   {
-    id: "starter", name: "Starter", price: 2499, annual: 1999, annualTotal: 23988,
+    id: "starter", name: "Starter", price: 499, annual: 399, annualTotal: 4788,
     color: T.blue, desc: "For small teams getting clarity on workload",
     features: ["Up to 15 employees", "3 managers", "Core analytics dashboard", "Task management", "Workload calculations", "Email support"],
   },
   {
-    id: "growth", name: "Growth", price: 6499, annual: 5199, annualTotal: 62388,
+    id: "growth", name: "Growth", price: 1499, annual: 1199, annualTotal: 14388,
     color: T.green, popular: true, desc: "Full visibility and control at scale",
     features: ["Up to 75 employees", "Unlimited managers", "Advanced analytics & trends", "Insights engine + suggestions", "CSV / PDF export", "Slack integration", "Priority support", "Custom team colours"],
   },
@@ -397,7 +397,7 @@ function LandingPage({ onSignup, onLogin, user, onPaySuccess }) {
   const faqs = [
     { q: "How does the workload calculation work?", a: "We calculate Workload% = (Total Assigned Hours) ÷ (Weekly Capacity). Employees below 60% are Underloaded, 60–100% are Balanced, and above 100% are Overloaded. It's simple, transparent, and immediately actionable." },
     { q: "Can I import our existing tasks from Jira or Asana?", a: "CSV import is available on all plans. Native Jira, Linear and Asana integrations are available on Growth and Enterprise plans." },
-    { q: "Is there a free trial?", a: "Yes — all plans start with a 14-day free trial, no credit card required. You'll have full access to all features in your selected plan." },
+    { q: "Is there a free trial?", a: "Yes — all plans start with a 7-day free trial, no credit card required. You'll have full access to all features in your selected plan." },
     { q: "How is data secured?", a: "All data is encrypted at rest (AES-256) and in transit (TLS 1.3). We're SOC 2 Type II compliant and undergo annual third-party security audits." },
     { q: "Can I change plans later?", a: "Absolutely. You can upgrade or downgrade at any time. Upgrades take effect immediately; downgrades apply at the end of your billing period." },
     { q: "Do you offer discounts for nonprofits or startups?", a: "Yes — nonprofits receive 40% off, and YC/accelerator-backed startups get 6 months free on Growth. Contact us to apply." },
@@ -445,7 +445,7 @@ function LandingPage({ onSignup, onLogin, user, onPaySuccess }) {
           <Btn variant="green" size="xl" onClick={() => { document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" }); }}>See plans & pricing →</Btn>
           <Btn variant="ghost" size="xl" onClick={onLogin}>Sign in</Btn>
         </div>
-        <p className="fu4" style={{ fontSize: 12, color: T.muted }}>14-day free trial · Cancel anytime · Razorpay secured · GST invoice included</p>
+        <p className="fu4" style={{ fontSize: 12, color: T.muted }}>7-day free trial · Cancel anytime · Razorpay secured · GST invoice included</p>
 
         {/* DASHBOARD MOCKUP */}
         <div className="fu5" style={{ marginTop: 60, border: `1px solid ${T.borderMid}`, borderRadius: 16, overflow: "hidden", boxShadow: "0 60px 120px rgba(0,0,0,0.6)", background: T.surface }}>
@@ -660,7 +660,7 @@ function LandingPage({ onSignup, onLogin, user, onPaySuccess }) {
       {/* CTA */}
       <section style={{ borderTop: `1px solid ${T.border}`, padding: "80px 24px", background: T.bgAlt, textAlign: "center" }}>
         <h2 className="heading" style={{ fontSize: 44, color: T.bright, marginBottom: 16 }}>Start your free trial today</h2>
-        <p style={{ fontSize: 17, color: T.mutedText, marginBottom: 36, maxWidth: 440, margin: "0 auto 36px" }}>14 days free. Full access. No credit card. Cancel anytime.</p>
+        <p style={{ fontSize: 17, color: T.mutedText, marginBottom: 36, maxWidth: 440, margin: "0 auto 36px" }}>7 days free. Full access. No credit card. Cancel anytime.</p>
         <Btn variant="green" size="xl" onClick={onSignup}>Create your account →</Btn>
       </section>
 
@@ -732,11 +732,11 @@ function AuthPage({ mode: initMode, onAuth, onLanding }) {
       return;
     }
 
-    // Regular signup — starts 14-day trial
+    // Regular signup — starts 7-day trial
     if (mode === "signup") {
       const name = form.name.trim();
       onAuth({ id: Date.now(), name, email: form.email, role: form.role, org: form.org, plan: null, paid: false, signupDate: new Date().toISOString(), avatar: name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) });
-      notify("Account created! Your 14-day trial has started 🎉", "success");
+      notify("Account created! Your 7-day trial has started 🎉", "success");
       return;
     }
 
@@ -777,7 +777,7 @@ function AuthPage({ mode: initMode, onAuth, onLanding }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 48, background: T.bg }}>
         <div style={{ width: "100%", maxWidth: 400, animation: "fadeUp 0.35s ease" }}>
           <h2 className="heading" style={{ fontSize: 28, color: T.bright, marginBottom: 6 }}>{mode === "login" ? "Sign in to your workspace" : "Create your account"}</h2>
-          <p style={{ fontSize: 14, color: T.sub, marginBottom: 28 }}>{mode === "login" ? "Enter your credentials to continue" : "14-day free trial — no credit card required"}</p>
+          <p style={{ fontSize: 14, color: T.sub, marginBottom: 28 }}>{mode === "login" ? "Enter your credentials to continue" : "7-day free trial — no credit card required"}</p>
 
           {mode === "signup" && (
             <div style={{ marginBottom: 15 }}>
@@ -1997,7 +1997,7 @@ function AnalyticsPage({ employees, tasks, teams, workloads }) {
 function BillingTab({ user }) {
   const [billing, setBilling] = useState("monthly");
   const [showUpgrade, setShowUpgrade] = useState(false);
-  const [activePlan, setActivePlan] = useState({ id: "growth", name: "Growth", price: 6499, renewsOn: "7 May 2025", cycle: "monthly" });
+  const [activePlan, setActivePlan] = useState({ id: "growth", name: "Growth", price: 1499, renewsOn: "7 May 2025", cycle: "monthly" });
   const [invoices] = useState([
     { id: "INV-2025-004", date: "7 Apr 2025", amount: 6499, status: "paid", method: "UPI" },
     { id: "INV-2025-003", date: "7 Mar 2025", amount: 6499, status: "paid", method: "Visa ••4242" },
@@ -2374,7 +2374,7 @@ function PaywallScreen({ user, onPaid, onLogout }) {
           <div style={{ marginTop: 28, marginBottom: 16 }}>
             {trial.expired ? (
               <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 16px", borderRadius: 20, background: T.redDim, border: `1px solid ${T.redBorder}`, fontSize: 13, color: T.red, marginBottom: 16 }}>
-                ⚠ Your 14-day free trial has ended
+                ⚠ Your 7-day free trial has ended
               </div>
             ) : (
               <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 16px", borderRadius: 20, background: T.yellowDim, border: `1px solid ${T.yellowBorder}`, fontSize: 13, color: T.yellow, marginBottom: 16 }}>
