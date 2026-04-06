@@ -2818,28 +2818,33 @@ export default function App() {
     else setScreen("paywall");
   }, [loadUserData]);
 
+  const sessionInitialized = useRef(false);
+
   useEffect(() => {
-    // Use onAuthStateChange as the single source of truth.
-    // INITIAL_SESSION fires on mount for existing sessions; SIGNED_IN fires on actual login.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === "INITIAL_SESSION") {
-        if (session) {
-          await loadUserProfile(session.user);
-        } else {
-          setAppLoading(false);
-        }
-      } else if (event === "SIGNED_IN" && session) {
+    // getSession handles the initial session on page load
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      sessionInitialized.current = true;
+      if (session) loadUserProfile(session.user);
+      else setAppLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" && session) {
+        // Supabase fires this for the existing session on mount — skip if getSession already handled it
+        if (!sessionInitialized.current) return;
         setAppLoading(true);
-        await loadUserProfile(session.user);
+        loadUserProfile(session.user);
       } else if (event === "USER_UPDATED" && session) {
         setAppLoading(true);
-        await loadUserProfile(session.user);
+        loadUserProfile(session.user);
       } else if (event === "SIGNED_OUT") {
+        sessionInitialized.current = false;
         setUser(null); setTeams([]); setEmployees([]); setTasks([]);
         setScreen("landing"); setPage("dashboard");
         setAppLoading(false);
       }
     });
+
     return () => subscription.unsubscribe();
   }, [loadUserProfile]);
 
