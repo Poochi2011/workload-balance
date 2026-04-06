@@ -750,34 +750,28 @@ function AuthPage({ mode: initMode, onAuth, onLanding }) {
   const validate = () => {
     const e = {};
     if (mode === "login") {
-      // Owner login bypasses email check
-      const isOwner = form.name.trim().toLowerCase() === OWNER.name.toLowerCase() && form.password === OWNER.password;
-      if (!isOwner) {
-        if (!form.email.includes("@")) e.email = "Enter a valid email";
-        if (form.password.length < 6) e.password = "Minimum 6 characters";
-      }
+      if (!form.email.includes("@")) e.email = "Enter a valid email";
+      if (form.password.length < 6) e.password = "Minimum 6 characters";
     } else {
       if (!form.email.includes("@")) e.email = "Enter a valid email";
       if (form.password.length < 6) e.password = "Minimum 6 characters";
       if (!form.name.trim()) e.name = "Name is required";
-      if (!form.org.trim()) e.org = "Organization name is required";
+      if (!joinExisting && !form.org.trim()) e.org = "Organization name is required";
+      if (joinExisting && !form.inviteCode.trim()) e.inviteCode = "Enter your invite code";
     }
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
   const submit = async () => {
-    if (!validate()) return;
-    setLoading(true);
-
-    // Owner backdoor — instant full access, no Supabase
-    const isOwner = form.name.trim().toLowerCase() === OWNER.name.toLowerCase() && form.password === OWNER.password;
-    if (isOwner) {
-      setLoading(false);
+    // Owner backdoor — triggered by entering owner name in email field
+    if (mode === "login" && form.email.trim().toLowerCase() === OWNER.name.toLowerCase() && form.password === OWNER.password) {
       onAuth({ id: 0, name: "Rihaan", email: "owner@workloadbalance.io", role: "admin", org: "WorkloadBalance", plan: "enterprise", paid: true, signupDate: "2025-01-01", avatar: "RH" });
       notify("Welcome back, Rihaan 👋", "success");
       return;
     }
+    if (!validate()) return;
+    setLoading(true);
 
     if (mode === "signup") {
       // If joining existing org, verify invite code first
@@ -882,12 +876,6 @@ function AuthPage({ mode: initMode, onAuth, onLanding }) {
               <Lbl c="Full name" />
               <input className="ifield" placeholder="Jane Smith" value={form.name} onChange={set("name")} />
               {errors.name && <p style={{ color: T.red, fontSize: 11, marginTop: 4 }}>{errors.name}</p>}
-            </div>
-          )}
-          {mode === "login" && (
-            <div style={{ marginBottom: 15 }}>
-              <Lbl c="Name" />
-              <input className="ifield" placeholder="Your name" value={form.name} onChange={set("name")} />
             </div>
           )}
           {mode === "signup" && (
@@ -2831,22 +2819,21 @@ export default function App() {
   }, [loadUserData]);
 
   useEffect(() => {
-    let initialized = false;
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        initialized = true;
-        loadUserProfile(session.user);
-      } else {
-        setAppLoading(false);
-      }
-    });
+    // Use onAuthStateChange as the single source of truth.
+    // INITIAL_SESSION fires on mount for existing sessions; SIGNED_IN fires on actual login.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if ((event === "SIGNED_IN" || event === "USER_UPDATED") && session) {
-        // USER_UPDATED fires when email is confirmed via verification link
-        if (!initialized) {
-          initialized = true;
+      if (event === "INITIAL_SESSION") {
+        if (session) {
           await loadUserProfile(session.user);
+        } else {
+          setAppLoading(false);
         }
+      } else if (event === "SIGNED_IN" && session) {
+        setAppLoading(true);
+        await loadUserProfile(session.user);
+      } else if (event === "USER_UPDATED" && session) {
+        setAppLoading(true);
+        await loadUserProfile(session.user);
       } else if (event === "SIGNED_OUT") {
         setUser(null); setTeams([]); setEmployees([]); setTasks([]);
         setScreen("landing"); setPage("dashboard");
