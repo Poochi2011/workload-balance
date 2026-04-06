@@ -363,6 +363,10 @@ function openRazorpay({ plan, billing, user, onSuccess }) {
       },
       handler: function (response) {
         // response.razorpay_payment_id, .razorpay_order_id, .razorpay_signature
+        // Persist paid status to Supabase immediately
+        if (user?.id && user.id !== 0) {
+          supabase.from("profiles").update({ paid: true, plan: plan.id }).eq("id", user.id).then(() => {});
+        }
         onSuccess(response, plan, billing);
       },
     };
@@ -412,7 +416,7 @@ const TESTIMONIALS = [
   { name: "David Osei", role: "CTO", company: "BuildFast", av: "DO", color: T.yellow, text: "Game-changer for sprint planning. We now open Workload Balance before every planning meeting. It's become the source of truth for team capacity.", stars: 5 },
 ];
 
-function LandingPage({ onSignup, onLogin, user, onPaySuccess }) {
+function LandingPage({ onSignup, onLogin, onDemo, user, onPaySuccess }) {
   const [billing, setBilling] = useState("monthly");
   const [openFaq, setOpenFaq] = useState(null);
   const [checkoutPlan, setCheckoutPlan] = useState(null); // plan being purchased
@@ -480,6 +484,7 @@ function LandingPage({ onSignup, onLogin, user, onPaySuccess }) {
         </p>
         <div className="fu3" style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginBottom: 16 }}>
           <Btn variant="green" size="xl" onClick={() => { document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" }); }}>See plans & pricing →</Btn>
+          <Btn variant="ghost" size="xl" onClick={onDemo}>Try live demo →</Btn>
           <Btn variant="ghost" size="xl" onClick={onLogin}>Sign in</Btn>
         </div>
         <p className="fu4" style={{ fontSize: 12, color: T.muted }}>7-day free trial · Cancel anytime · Razorpay secured · GST invoice included</p>
@@ -731,9 +736,12 @@ const LogoMark = ({ size = "md" }) => {
 // ═══════════════════════════════════════════════════════════════
 function AuthPage({ mode: initMode, onAuth, onLanding }) {
   const [mode, setMode] = useState(initMode || "login");
-  const [form, setForm] = useState({ name: "", email: "", password: "", role: "admin", org: "" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", role: "admin", org: "", inviteCode: "" });
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
+  const [joinExisting, setJoinExisting] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
+  const [sentEmail, setSentEmail] = useState("");
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
   const validate = () => {
@@ -769,15 +777,25 @@ function AuthPage({ mode: initMode, onAuth, onLanding }) {
     }
 
     if (mode === "signup") {
+      // If joining existing org, verify invite code first
+      let joinOrgId = null;
+      let joinOrgName = null;
+      if (joinExisting && form.inviteCode.trim()) {
+        const { data: org } = await supabase.from("organizations").select("id,name").eq("invite_code", form.inviteCode.trim().toUpperCase()).single();
+        if (!org) { setLoading(false); setErrors({ inviteCode: "Invalid invite code — double check and try again." }); return; }
+        joinOrgId = org.id;
+        joinOrgName = org.name;
+      }
       const { error } = await supabase.auth.signUp({
         email: form.email,
         password: form.password,
-        options: { data: { name: form.name.trim(), role: form.role, org: form.org.trim() } },
+        options: { data: { name: form.name.trim(), role: form.role, org: joinOrgName || form.org.trim(), join_org_id: joinOrgId, create_org: !joinExisting } },
       });
       setLoading(false);
       if (error) { setErrors({ email: error.message }); return; }
-      notify("Account created! Your 7-day trial has started 🎉", "success");
-      // App's onAuthStateChange will fire and load the user
+      setSentEmail(form.email);
+      setEmailSent(true);
+      // App's onAuthStateChange will fire once email is verified
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email: form.email, password: form.password });
       setLoading(false);
@@ -785,6 +803,30 @@ function AuthPage({ mode: initMode, onAuth, onLanding }) {
       // App's onAuthStateChange will fire and load the user
     }
   };
+
+  // Email verification pending screen
+  if (emailSent) {
+    return (
+      <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        <G />
+        <div style={{ maxWidth: 440, width: "100%", textAlign: "center", animation: "fadeUp 0.35s ease" }}>
+          <div style={{ width: 72, height: 72, borderRadius: "50%", background: T.greenDim, border: `2px solid ${T.greenBorder}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30, margin: "0 auto 24px" }}>📧</div>
+          <h2 className="heading" style={{ fontSize: 26, color: T.bright, marginBottom: 10 }}>Verify your email</h2>
+          <p style={{ fontSize: 14.5, color: T.mutedText, lineHeight: 1.7, marginBottom: 8 }}>
+            We sent a confirmation link to <strong style={{ color: T.text }}>{sentEmail}</strong>.
+          </p>
+          <p style={{ fontSize: 13, color: T.sub, lineHeight: 1.65, marginBottom: 28 }}>
+            Click the link in the email to activate your account and start your 7-day free trial. Check your spam folder if you don't see it within a minute.
+          </p>
+          <div style={{ padding: "16px 20px", background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 10, fontSize: 13, color: T.sub, marginBottom: 24 }}>
+            Already clicked the link?{" "}
+            <button onClick={() => window.location.reload()} style={{ color: T.green, background: "none", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Refresh page →</button>
+          </div>
+          <button onClick={onLanding} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 13 }}>← Back to home</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, display: "grid", gridTemplateColumns: "1fr 1fr" }}>
@@ -835,9 +877,23 @@ function AuthPage({ mode: initMode, onAuth, onLanding }) {
           )}
           {mode === "signup" && (
             <div style={{ marginBottom: 15 }}>
-              <Lbl c="Organization name" />
-              <input className="ifield" placeholder="Acme Corp" value={form.org} onChange={set("org")} />
-              {errors.org && <p style={{ color: T.red, fontSize: 11, marginTop: 4 }}>{errors.org}</p>}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <Lbl c={joinExisting ? "Invite Code" : "Organization name"} />
+                <button onClick={() => setJoinExisting(j => !j)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11.5, color: T.green, fontFamily: "inherit" }}>
+                  {joinExisting ? "← Create new org" : "Have an invite code?"}
+                </button>
+              </div>
+              {joinExisting ? (
+                <>
+                  <input className="ifield" placeholder="e.g. ACME-1A2B" value={form.inviteCode} onChange={set("inviteCode")} style={{ letterSpacing: "0.08em", textTransform: "uppercase" }} />
+                  {errors.inviteCode && <p style={{ color: T.red, fontSize: 11, marginTop: 4 }}>{errors.inviteCode}</p>}
+                </>
+              ) : (
+                <>
+                  <input className="ifield" placeholder="Acme Corp" value={form.org} onChange={set("org")} />
+                  {errors.org && <p style={{ color: T.red, fontSize: 11, marginTop: 4 }}>{errors.org}</p>}
+                </>
+              )}
             </div>
           )}
           <div style={{ marginBottom: 15 }}>
@@ -887,7 +943,7 @@ function AuthPage({ mode: initMode, onAuth, onLanding }) {
 // ═══════════════════════════════════════════════════════════════
 //  APP SHELL
 // ═══════════════════════════════════════════════════════════════
-function AppShell({ user, onLogout, children, page, setPage, tasks, workloads }) {
+function AppShell({ user, onLogout, children, page, setPage, tasks, workloads, demoMode, onSignup }) {
   const over = workloads.filter(w => w.status === "overloaded").length;
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: "▦", badge: over > 0 ? over : null, badgeColor: T.red },
@@ -962,6 +1018,15 @@ function AppShell({ user, onLogout, children, page, setPage, tasks, workloads })
 
       {/* MAIN */}
       <main style={{ flex: 1, overflow: "auto", padding: "32px 36px" }}>
+        {demoMode && (
+          <div style={{ background: "linear-gradient(135deg,rgba(100,220,140,0.08),rgba(79,163,255,0.08))", border: `1px solid rgba(100,220,140,0.25)`, borderRadius: 10, padding: "11px 18px", marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 16 }}>👁️</span>
+              <span style={{ fontSize: 13, color: T.text }}><strong style={{ color: T.green }}>Live Demo</strong> — read-only preview with sample data. No edits are saved.</span>
+            </div>
+            <Btn variant="green" size="sm" onClick={onSignup}>Start free trial →</Btn>
+          </div>
+        )}
         {children}
       </main>
     </div>
@@ -1182,7 +1247,7 @@ function DashboardPage({ employees, tasks, teams, workloads, onNavigate }) {
 // ═══════════════════════════════════════════════════════════════
 //  TASKS PAGE
 // ═══════════════════════════════════════════════════════════════
-function TasksPage({ tasks, setTasks, employees, teams, userId }) {
+function TasksPage({ tasks, setTasks, employees, teams, userId, demoMode }) {
   const [open, setOpen] = useState(false);
   const [editTask, setEditTask] = useState(null);
   const [view, setView] = useState("kanban");
@@ -1304,10 +1369,12 @@ function TasksPage({ tasks, setTasks, employees, teams, userId }) {
       <div className="task-card" style={{ padding: 14, background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 10, borderLeft: `3px solid ${cols.find(c => c.key === task.status)?.color || T.border}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 7 }}>
           <h4 style={{ fontSize: 13.5, fontWeight: 600, color: T.bright, lineHeight: 1.35, flex: 1 }}>{task.title}</h4>
-          <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
-            <button onClick={() => openEdit(task)} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 13, padding: "1px 4px", borderRadius: 4, transition: "color 0.12s" }} onMouseEnter={e => e.currentTarget.style.color = T.blue} onMouseLeave={e => e.currentTarget.style.color = T.muted}>✎</button>
-            <button onClick={() => del(task.id)} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 14, padding: "1px 4px", borderRadius: 4, transition: "color 0.12s" }} onMouseEnter={e => e.currentTarget.style.color = T.red} onMouseLeave={e => e.currentTarget.style.color = T.muted}>✕</button>
-          </div>
+          {!demoMode && (
+            <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
+              <button onClick={() => openEdit(task)} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 13, padding: "1px 4px", borderRadius: 4, transition: "color 0.12s" }} onMouseEnter={e => e.currentTarget.style.color = T.blue} onMouseLeave={e => e.currentTarget.style.color = T.muted}>✎</button>
+              <button onClick={() => del(task.id)} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 14, padding: "1px 4px", borderRadius: 4, transition: "color 0.12s" }} onMouseEnter={e => e.currentTarget.style.color = T.red} onMouseLeave={e => e.currentTarget.style.color = T.muted}>✕</button>
+            </div>
+          )}
         </div>
         {task.desc && <p style={{ fontSize: 12, color: T.sub, lineHeight: 1.55, marginBottom: 9 }}>{task.desc}</p>}
         <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10 }}>
@@ -1339,11 +1406,13 @@ function TasksPage({ tasks, setTasks, employees, teams, userId }) {
           <h1 className="heading" style={{ fontSize: 28, color: T.bright, marginBottom: 4 }}>Tasks</h1>
           <p style={{ fontSize: 13.5, color: T.sub }}>{tasks.length} total · {tasks.filter(t => t.status === "in-progress").length} in progress · {tasks.filter(t => t.status === "done").length} done</p>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input ref={csvRef} type="file" accept=".csv" style={{ display: "none" }} onChange={parseTasksCsv} />
-          <Btn variant="ghost" size="md" onClick={() => csvRef.current.click()}>↑ Import CSV</Btn>
-          <Btn variant="green" size="md" onClick={openAdd}>+ New Task</Btn>
-        </div>
+        {!demoMode && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <input ref={csvRef} type="file" accept=".csv" style={{ display: "none" }} onChange={parseTasksCsv} />
+            <Btn variant="ghost" size="md" onClick={() => csvRef.current.click()}>↑ Import CSV</Btn>
+            <Btn variant="green" size="md" onClick={openAdd}>+ New Task</Btn>
+          </div>
+        )}
       </div>
 
       {/* FILTERS */}
@@ -1505,7 +1574,7 @@ function TasksPage({ tasks, setTasks, employees, teams, userId }) {
 // ═══════════════════════════════════════════════════════════════
 //  EMPLOYEES PAGE
 // ═══════════════════════════════════════════════════════════════
-function EmployeesPage({ employees, setEmployees, teams, tasks, workloads, userId }) {
+function EmployeesPage({ employees, setEmployees, teams, tasks, workloads, userId, demoMode }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const [search, setSearch] = useState("");
@@ -1600,11 +1669,13 @@ function EmployeesPage({ employees, setEmployees, teams, tasks, workloads, userI
           <h1 className="heading" style={{ fontSize: 28, color: T.bright, marginBottom: 4 }}>Employees</h1>
           <p style={{ fontSize: 13.5, color: T.sub }}>{employees.length} people across {teams.length} teams</p>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input ref={empCsvRef} type="file" accept=".csv" style={{ display: "none" }} onChange={parseEmpCsv} />
-          <Btn variant="ghost" onClick={() => empCsvRef.current.click()}>↑ Import CSV</Btn>
-          <Btn variant="green" onClick={() => setOpen(true)}>+ Add Employee</Btn>
-        </div>
+        {!demoMode && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <input ref={empCsvRef} type="file" accept=".csv" style={{ display: "none" }} onChange={parseEmpCsv} />
+            <Btn variant="ghost" onClick={() => empCsvRef.current.click()}>↑ Import CSV</Btn>
+            <Btn variant="green" onClick={() => setOpen(true)}>+ Add Employee</Btn>
+          </div>
+        )}
       </div>
 
       {/* FILTERS */}
@@ -1714,7 +1785,7 @@ function EmployeesPage({ employees, setEmployees, teams, tasks, workloads, userI
               </div>
               <Divider />
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-                <Btn variant="danger" size="sm" onClick={() => del(selW.id)}>Remove Employee</Btn>
+                {!demoMode && <Btn variant="danger" size="sm" onClick={() => del(selW.id)}>Remove Employee</Btn>}
                 <Btn variant="ghost" size="sm" onClick={() => setSelected(null)}>Close</Btn>
               </div>
             </div>
@@ -1778,7 +1849,7 @@ function EmployeesPage({ employees, setEmployees, teams, tasks, workloads, userI
 // ═══════════════════════════════════════════════════════════════
 //  TEAMS PAGE
 // ═══════════════════════════════════════════════════════════════
-function TeamsPage({ teams, setTeams, employees, workloads, userId }) {
+function TeamsPage({ teams, setTeams, employees, workloads, userId, demoMode }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState({ name: "", description: "", color: "#4fa3ff", emoji: "🏗️" });
@@ -1817,7 +1888,7 @@ function TeamsPage({ teams, setTeams, employees, workloads, userId }) {
           <h1 className="heading" style={{ fontSize: 28, color: T.bright, marginBottom: 4 }}>Teams</h1>
           <p style={{ fontSize: 13.5, color: T.sub }}>{teams.length} teams · {employees.length} total employees</p>
         </div>
-        <Btn variant="green" onClick={() => setOpen(true)}>+ New Team</Btn>
+        {!demoMode && <Btn variant="green" onClick={() => setOpen(true)}>+ New Team</Btn>}
       </div>
 
       <div className="fu1" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(290px,1fr))", gap: 14 }}>
@@ -1888,7 +1959,7 @@ function TeamsPage({ teams, setTeams, employees, workloads, userId }) {
               </div>
               <Divider />
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-                <Btn variant="danger" size="sm" onClick={() => del(selected.id)}>Delete Team</Btn>
+                {!demoMode && <Btn variant="danger" size="sm" onClick={() => del(selected.id)}>Delete Team</Btn>}
                 <Btn variant="ghost" size="sm" onClick={() => setSelected(null)}>Close</Btn>
               </div>
             </div>
@@ -2298,6 +2369,71 @@ function BillingTab({ user }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  ORG SETTINGS TAB
+// ═══════════════════════════════════════════════════════════════
+function OrgSettingsTab({ user }) {
+  const [org, setOrg] = useState(null);
+  const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!user.orgId) { setLoading(false); return; }
+    Promise.all([
+      supabase.from("organizations").select("*").eq("id", user.orgId).single(),
+      supabase.from("profiles").select("id,name,role,signup_date").eq("org_id", user.orgId),
+    ]).then(([{ data: o }, { data: m }]) => {
+      setOrg(o); setMembers(m || []); setLoading(false);
+    });
+  }, [user.orgId]);
+
+  const copy = () => {
+    navigator.clipboard.writeText(org?.invite_code || "").then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+
+  if (loading) return <div style={{ color: T.muted, fontSize: 13, padding: 20 }}>Loading…</div>;
+  if (!org) return (
+    <Card style={{ padding: 28 }}>
+      <h3 className="heading" style={{ fontSize: 18, color: T.bright, marginBottom: 10 }}>Organization</h3>
+      <p style={{ fontSize: 13.5, color: T.sub }}>No organization linked to your account.</p>
+    </Card>
+  );
+
+  return (
+    <Card style={{ padding: 28 }}>
+      <h3 className="heading" style={{ fontSize: 18, color: T.bright, marginBottom: 20 }}>Organization</h3>
+      <div style={{ padding: 18, background: T.bgAlt, borderRadius: 10, marginBottom: 20 }}>
+        <div style={{ fontSize: 11, color: T.muted, marginBottom: 4, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", letterSpacing: "0.08em" }}>Org Name</div>
+        <div style={{ fontSize: 17, fontWeight: 700, color: T.bright }}>{org.name}</div>
+      </div>
+      <div style={{ padding: 18, background: T.greenDim, border: `1px solid ${T.greenBorder}`, borderRadius: 10, marginBottom: 24 }}>
+        <div style={{ fontSize: 11, color: T.green, marginBottom: 8, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", letterSpacing: "0.08em" }}>Invite Code</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span className="mono" style={{ fontSize: 22, fontWeight: 700, color: T.bright, letterSpacing: "0.12em" }}>{org.invite_code}</span>
+          <button onClick={copy} className="btn-ghost" style={{ padding: "6px 14px", borderRadius: 7, fontSize: 12, fontFamily: "inherit", cursor: "pointer" }}>
+            {copied ? "✓ Copied!" : "Copy"}
+          </button>
+        </div>
+        <p style={{ fontSize: 12, color: T.sub, marginTop: 8 }}>Share this code with teammates — they enter it during signup to join your organization.</p>
+      </div>
+      <h4 className="heading" style={{ fontSize: 15, color: T.bright, marginBottom: 12 }}>Members ({members.length})</h4>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {members.map(m => (
+          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: T.bgAlt, borderRadius: 8 }}>
+            <Av t={m.name?.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) || "??"} size={32} color={T.blue} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500 }}>{m.name}</div>
+              <div style={{ fontSize: 11.5, color: T.muted, textTransform: "capitalize" }}>{m.role || "member"}</div>
+            </div>
+            {org.owner_id === m.id && <Chip label="Owner" color={T.green} bg={T.greenDim} />}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  SETTINGS PAGE
 // ═══════════════════════════════════════════════════════════════
 function SettingsPage({ user, setUser }) {
@@ -2310,7 +2446,7 @@ function SettingsPage({ user, setUser }) {
 
   const Toggle = ({ on, onChange }) => <button className={`toggle ${on ? "on" : ""}`} onClick={() => onChange(!on)} />;
 
-  const tabs = [["profile","👤","Profile"],["notifications","🔔","Notifications"],["thresholds","⚖️","Thresholds"],["billing","💳","Billing"],["security","🔒","Security"],["api","🔑","API"]];
+  const tabs = [["profile","👤","Profile"],["organization","🏢","Organization"],["notifications","🔔","Notifications"],["thresholds","⚖️","Thresholds"],["billing","💳","Billing"],["security","🔒","Security"],["api","🔑","API"]];
 
   return (
     <div>
@@ -2360,6 +2496,8 @@ function SettingsPage({ user, setUser }) {
               </div>
             </Card>
           )}
+
+          {tab === "organization" && <OrgSettingsTab user={user} />}
 
           {tab === "notifications" && (
             <Card style={{ padding: 28 }}>
@@ -2621,8 +2759,19 @@ export default function App() {
     let { data: profile } = await supabase.from("profiles").select("*").eq("id", supaUser.id).single();
     if (!profile) {
       const name = supaUser.user_metadata?.name || supaUser.email.split("@")[0];
-      await supabase.from("profiles").insert({ id: supaUser.id, name, plan: "trial", paid: false });
-      profile = { id: supaUser.id, name, plan: "trial", paid: false, signup_date: new Date().toISOString() };
+      const meta = supaUser.user_metadata || {};
+      let orgId = null;
+      // Join existing org via invite code metadata
+      if (meta.join_org_id) {
+        orgId = meta.join_org_id;
+      } else if (meta.create_org !== false) {
+        // Create new org with random invite code
+        const code = (meta.org || name).replace(/[^A-Z0-9]/gi, "").toUpperCase().slice(0, 4) + "-" + Math.random().toString(36).slice(2, 6).toUpperCase();
+        const { data: newOrg } = await supabase.from("organizations").insert({ name: meta.org || name + "'s Org", owner_id: supaUser.id, invite_code: code }).select("id").single();
+        if (newOrg) orgId = newOrg.id;
+      }
+      await supabase.from("profiles").insert({ id: supaUser.id, name, plan: "trial", paid: false, org_id: orgId });
+      profile = { id: supaUser.id, name, plan: "trial", paid: false, signup_date: new Date().toISOString(), org_id: orgId };
     }
     const name = profile.name || supaUser.user_metadata?.name || supaUser.email.split("@")[0];
     const u = {
@@ -2630,7 +2779,8 @@ export default function App() {
       name,
       email: supaUser.email,
       role: supaUser.user_metadata?.role || "admin",
-      org: supaUser.user_metadata?.org || "",
+      org: supaUser.user_metadata?.org || profile.name + "'s Org" || "",
+      orgId: profile.org_id || null,
       plan: profile.plan,
       paid: profile.paid || false,
       signupDate: profile.signup_date,
@@ -2669,6 +2819,10 @@ export default function App() {
   }, [loadUserProfile]);
 
   const goAuth = (mode) => { setAuthMode(mode); setScreen("auth"); };
+  const goDemo = () => {
+    setTeams(SEED_TEAMS); setEmployees(SEED_EMPLOYEES); setTasks(SEED_TASKS);
+    setScreen("demo");
+  };
   // Used only by owner backdoor path
   const onAuth = (u) => {
     const signupDate = u.signupDate || new Date().toISOString();
@@ -2700,7 +2854,16 @@ export default function App() {
   return (
     <>
       <G />
-      {screen === "landing" && <LandingPage onSignup={() => goAuth("signup")} onLogin={() => goAuth("login")} user={user} onPaySuccess={(resp, plan, billing) => { setUser(u => ({ ...u, paid: true, plan: plan.id })); setScreen("app"); }} />}
+      {screen === "landing" && <LandingPage onSignup={() => goAuth("signup")} onLogin={() => goAuth("login")} onDemo={goDemo} user={user} onPaySuccess={(resp, plan, billing) => { setUser(u => ({ ...u, paid: true, plan: plan.id })); setScreen("app"); }} />}
+      {screen === "demo" && (
+        <AppShell user={{ name: "Demo User", email: "", role: "admin", org: "Demo Org", plan: "growth", paid: true, avatar: "DM" }} onLogout={() => { setPage("dashboard"); setScreen("landing"); }} page={page} setPage={setPage} tasks={tasks} workloads={workloads} demoMode={true} onSignup={() => goAuth("signup")}>
+          {page === "dashboard" && <DashboardPage employees={employees} tasks={tasks} teams={teams} workloads={workloads} onNavigate={setPage} />}
+          {page === "tasks" && <TasksPage tasks={tasks} setTasks={setTasks} employees={employees} teams={teams} userId={null} demoMode={true} />}
+          {page === "employees" && <EmployeesPage employees={employees} setEmployees={setEmployees} teams={teams} tasks={tasks} workloads={workloads} userId={null} demoMode={true} />}
+          {page === "teams" && <TeamsPage teams={teams} setTeams={setTeams} employees={employees} workloads={workloads} userId={null} demoMode={true} />}
+          {page === "analytics" && <AnalyticsPage employees={employees} tasks={tasks} teams={teams} workloads={workloads} />}
+        </AppShell>
+      )}
       {screen === "auth" && <AuthPage mode={authMode} onAuth={onAuth} onLanding={() => setScreen("landing")} />}
       {screen === "paywall" && user && (
         <PaywallScreen user={user} onPaid={(plan, billing) => { setUser(u => ({ ...u, paid: true, plan: plan.id })); setScreen("app"); notify("🎉 Payment successful! Welcome to WorkloadBalance.", "success"); }} onLogout={onLogout} />
@@ -2717,9 +2880,9 @@ export default function App() {
             </div>
           ); })()}
           {page === "dashboard" && <DashboardPage employees={employees} tasks={tasks} teams={teams} workloads={workloads} onNavigate={setPage} />}
-          {page === "tasks" && <TasksPage tasks={tasks} setTasks={setTasks} employees={employees} teams={teams} userId={user.id} />}
-          {page === "employees" && <EmployeesPage employees={employees} setEmployees={setEmployees} teams={teams} tasks={tasks} workloads={workloads} userId={user.id} />}
-          {page === "teams" && <TeamsPage teams={teams} setTeams={setTeams} employees={employees} workloads={workloads} userId={user.id} />}
+          {page === "tasks" && <TasksPage tasks={tasks} setTasks={setTasks} employees={employees} teams={teams} userId={user.id} demoMode={false} />}
+          {page === "employees" && <EmployeesPage employees={employees} setEmployees={setEmployees} teams={teams} tasks={tasks} workloads={workloads} userId={user.id} demoMode={false} />}
+          {page === "teams" && <TeamsPage teams={teams} setTeams={setTeams} employees={employees} workloads={workloads} userId={user.id} demoMode={false} />}
           {page === "analytics" && <AnalyticsPage employees={employees} tasks={tasks} teams={teams} workloads={workloads} />}
           {page === "settings" && <SettingsPage user={user} setUser={setUser} />}
         </AppShell>
