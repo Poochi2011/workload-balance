@@ -311,8 +311,8 @@ const Divider = ({ label }) => (
 // ═══════════════════════════════════════════════════════════════
 //  RAZORPAY CONFIG
 // ═══════════════════════════════════════════════════════════════
-const RZP_KEY = "SOcgvmFYYlfA7l";
-const RZP_LIVE = true; // Razorpay live
+const RZP_KEY = process.env.NEXT_PUBLIC_RZP_KEY || "";
+const RZP_LIVE = !!RZP_KEY; // Live only when key is set
 
 // Owner backdoor — only you get instant full access
 const OWNER = { name: "Rihaan", password: "pure_vessel" };
@@ -330,9 +330,8 @@ function getTrialInfo(signupDate) {
 
 // Razorpay checkout launcher — opens native Razorpay modal
 function openRazorpay({ plan, billing, user, onSuccess }) {
-  if (!RZP_LIVE) {
-    // Show coming soon modal instead of broken checkout
-    notify("💳 Payments launching very soon — your account will be activated automatically once live!", "info");
+  if (!RZP_LIVE || !RZP_KEY) {
+    notify("💳 Payment gateway not configured. Contact support.", "error");
     return;
   }
   const launch = () => {
@@ -416,14 +415,18 @@ const TESTIMONIALS = [
   { name: "David Osei", role: "CTO", company: "BuildFast", av: "DO", color: T.yellow, text: "Game-changer for sprint planning. We now open Workload Balance before every planning meeting. It's become the source of truth for team capacity.", stars: 5 },
 ];
 
-function LandingPage({ onSignup, onLogin, onDemo, user, onPaySuccess }) {
+function LandingPage({ onSignup, onLogin, onDemo, onSignupWithPlan, user, onPaySuccess }) {
   const [billing, setBilling] = useState("monthly");
   const [openFaq, setOpenFaq] = useState(null);
-  const [checkoutPlan, setCheckoutPlan] = useState(null); // plan being purchased
 
   const handlePlanClick = (plan) => {
     if (!plan.price) { window.location.href = "mailto:sales@workloadbalance.io?subject=Enterprise%20Enquiry"; return; }
-    if (!user) { setCheckoutPlan(plan); onSignup(); return; } // prompt signup first
+    if (!user) {
+      // User not logged in — send to signup with plan remembered
+      onSignupWithPlan ? onSignupWithPlan(plan, billing) : onSignup();
+      return;
+    }
+    // Already logged in — open Razorpay immediately
     openRazorpay({
       plan,
       billing,
@@ -786,20 +789,32 @@ function AuthPage({ mode: initMode, onAuth, onLanding }) {
         joinOrgId = org.id;
         joinOrgName = org.name;
       }
-      const { error } = await supabase.auth.signUp({
+      const { data: signUpData, error } = await supabase.auth.signUp({
         email: form.email,
         password: form.password,
         options: { data: { name: form.name.trim(), role: form.role, org: joinOrgName || form.org.trim(), join_org_id: joinOrgId, create_org: !joinExisting } },
       });
       setLoading(false);
       if (error) { setErrors({ email: error.message }); return; }
-      setSentEmail(form.email);
-      setEmailSent(true);
-      // App's onAuthStateChange will fire once email is verified
+      // If Supabase requires email confirmation, session will be null
+      if (!signUpData?.session) {
+        setSentEmail(form.email);
+        setEmailSent(true);
+      }
+      // If session exists, onAuthStateChange fires SIGNED_IN and loads the user automatically
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email: form.email, password: form.password });
       setLoading(false);
-      if (error) { setErrors({ email: "Invalid email or password." }); return; }
+      if (error) {
+        // Supabase returns a specific error when email is unconfirmed
+        if (error.message?.toLowerCase().includes("email not confirmed")) {
+          setSentEmail(form.email);
+          setEmailSent(true);
+          return;
+        }
+        setErrors({ email: "Invalid email or password." });
+        return;
+      }
       // App's onAuthStateChange will fire and load the user
     }
   };
@@ -2727,6 +2742,7 @@ export default function App() {
   const [teams, setTeams] = useState([]);
   const [notifs, setNotifs] = useState([]);
   const [appLoading, setAppLoading] = useState(true);
+  const pendingPlanRef = useRef(null); // { plan, billing } — set when user clicks a plan before signing in
   _setN = setNotifs;
 
   const workloads = useMemo(() => computeWorkload(employees, tasks), [employees, tasks]);
@@ -2788,11 +2804,30 @@ export default function App() {
     };
     setUser(u);
     await loadUserData(supaUser.id);
+    setAppLoading(false);
+
+    // If user clicked a plan before signing in, open Razorpay now
+    if (pendingPlanRef.current) {
+      const { plan, billing } = pendingPlanRef.current;
+      pendingPlanRef.current = null;
+      setScreen("app");
+      // Small delay so the app renders before the modal opens
+      setTimeout(() => {
+        openRazorpay({
+          plan, billing, user: u,
+          onSuccess: (resp, pl) => {
+            setUser(uu => ({ ...uu, paid: true, plan: pl.id }));
+            notify("🎉 Payment successful! Welcome to WorkloadBalance.", "success");
+          },
+        });
+      }, 400);
+      return;
+    }
+
     const trial = getTrialInfo(u.signupDate);
     if (u.paid) setScreen("app");
     else if (!trial.expired) { setScreen("app"); notify(`✓ Welcome! ${trial.daysLeft} trial days remaining.`, "info"); }
     else setScreen("paywall");
-    setAppLoading(false);
   }, [loadUserData]);
 
   useEffect(() => {
@@ -2806,9 +2841,12 @@ export default function App() {
       }
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === "SIGNED_IN" && session && !initialized) {
-        initialized = true;
-        await loadUserProfile(session.user);
+      if ((event === "SIGNED_IN" || event === "USER_UPDATED") && session) {
+        // USER_UPDATED fires when email is confirmed via verification link
+        if (!initialized) {
+          initialized = true;
+          await loadUserProfile(session.user);
+        }
       } else if (event === "SIGNED_OUT") {
         setUser(null); setTeams([]); setEmployees([]); setTasks([]);
         setScreen("landing"); setPage("dashboard");
@@ -2819,6 +2857,11 @@ export default function App() {
   }, [loadUserProfile]);
 
   const goAuth = (mode) => { setAuthMode(mode); setScreen("auth"); };
+  const goAuthWithPlan = (plan, billing) => {
+    pendingPlanRef.current = { plan, billing };
+    setAuthMode("signup");
+    setScreen("auth");
+  };
   const goDemo = () => {
     setTeams(SEED_TEAMS); setEmployees(SEED_EMPLOYEES); setTasks(SEED_TASKS);
     setScreen("demo");
@@ -2854,7 +2897,7 @@ export default function App() {
   return (
     <>
       <G />
-      {screen === "landing" && <LandingPage onSignup={() => goAuth("signup")} onLogin={() => goAuth("login")} onDemo={goDemo} user={user} onPaySuccess={(resp, plan, billing) => { setUser(u => ({ ...u, paid: true, plan: plan.id })); setScreen("app"); }} />}
+      {screen === "landing" && <LandingPage onSignup={() => goAuth("signup")} onLogin={() => goAuth("login")} onDemo={goDemo} onSignupWithPlan={goAuthWithPlan} user={user} onPaySuccess={(resp, plan, billing) => { setUser(u => ({ ...u, paid: true, plan: plan.id })); setScreen("app"); }} />}
       {screen === "demo" && (
         <AppShell user={{ name: "Demo User", email: "", role: "admin", org: "Demo Org", plan: "growth", paid: true, avatar: "DM" }} onLogout={() => { setPage("dashboard"); setScreen("landing"); }} page={page} setPage={setPage} tasks={tasks} workloads={workloads} demoMode={true} onSignup={() => goAuth("signup")}>
           {page === "dashboard" && <DashboardPage employees={employees} tasks={tasks} teams={teams} workloads={workloads} onNavigate={setPage} />}
