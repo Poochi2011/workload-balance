@@ -2733,6 +2733,17 @@ export default function App() {
   const [notifs, setNotifs] = useState([]);
   const [appLoading, setAppLoading] = useState(true);
   const pendingPlanRef = useRef(null); // { plan, billing } — set when user clicks a plan before signing in
+  // Also persist to localStorage so it survives email-confirmation page redirects
+  const setPendingPlan = (val) => {
+    pendingPlanRef.current = val;
+    if (val) localStorage.setItem("wb_pending_plan", JSON.stringify(val));
+    else localStorage.removeItem("wb_pending_plan");
+  };
+  // Restore on mount
+  useEffect(() => {
+    const saved = localStorage.getItem("wb_pending_plan");
+    if (saved) { try { pendingPlanRef.current = JSON.parse(saved); } catch(e) {} }
+  }, []);
   _setN = setNotifs;
 
   const workloads = useMemo(() => computeWorkload(employees, tasks), [employees, tasks]);
@@ -2797,9 +2808,10 @@ export default function App() {
     setAppLoading(false);
 
     // If user clicked a plan before signing in, open Razorpay now
-    if (pendingPlanRef.current) {
-      const { plan, billing } = pendingPlanRef.current;
-      pendingPlanRef.current = null;
+    const savedPending = pendingPlanRef.current || (() => { try { const s = localStorage.getItem("wb_pending_plan"); return s ? JSON.parse(s) : null; } catch(e) { return null; } })();
+    if (savedPending) {
+      const { plan, billing } = savedPending;
+      setPendingPlan(null);
       setScreen("app");
       // Small delay so the app renders before the modal opens
       setTimeout(() => {
@@ -2820,27 +2832,26 @@ export default function App() {
     else setScreen("paywall");
   }, [loadUserData]);
 
-  const sessionInitialized = useRef(false);
+  const loadedUserIdRef = useRef(null);
 
   useEffect(() => {
-    // getSession handles the initial session on page load
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      sessionInitialized.current = true;
-      if (session) loadUserProfile(session.user);
-      else setAppLoading(false);
-    });
+    const handleUser = async (user) => {
+      if (!user) { setAppLoading(false); return; }
+      if (loadedUserIdRef.current === user.id) return; // already loaded, skip
+      loadedUserIdRef.current = user.id;
+      await loadUserProfile(user);
+    };
+
+    supabase.auth.getSession().then(({ data: { session } }) => handleUser(session?.user ?? null));
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_IN" && session) {
-        // Supabase fires this for the existing session on mount — skip if getSession already handled it
-        if (!sessionInitialized.current) return;
-        setAppLoading(true);
-        loadUserProfile(session.user);
+        handleUser(session.user);
       } else if (event === "USER_UPDATED" && session) {
-        setAppLoading(true);
-        loadUserProfile(session.user);
+        loadedUserIdRef.current = null; // force reload on email confirm
+        handleUser(session.user);
       } else if (event === "SIGNED_OUT") {
-        sessionInitialized.current = false;
+        loadedUserIdRef.current = null;
         setUser(null); setTeams([]); setEmployees([]); setTasks([]);
         setScreen("landing"); setPage("dashboard");
         setAppLoading(false);
@@ -2852,7 +2863,7 @@ export default function App() {
 
   const goAuth = (mode) => { setAuthMode(mode); setScreen("auth"); };
   const goAuthWithPlan = (plan, billing) => {
-    pendingPlanRef.current = { plan, billing };
+    setPendingPlan({ plan, billing });
     setAuthMode("signup");
     setScreen("auth");
   };
