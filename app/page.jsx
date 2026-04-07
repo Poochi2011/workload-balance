@@ -2186,16 +2186,12 @@ function AnalyticsPage({ employees, tasks, teams, workloads }) {
 // ═══════════════════════════════════════════════════════════════
 //  BILLING TAB COMPONENT (inside Settings)
 // ═══════════════════════════════════════════════════════════════
-function BillingTab({ user }) {
+function BillingTab({ user, setUser }) {
   const [billing, setBilling] = useState("monthly");
   const [showUpgrade, setShowUpgrade] = useState(false);
-  const [activePlan, setActivePlan] = useState({ id: "growth", name: "Growth", price: 1499, renewsOn: "7 May 2025", cycle: "monthly" });
-  const [invoices] = useState([
-    { id: "INV-2025-004", date: "7 Apr 2025", amount: 6499, status: "paid", method: "UPI" },
-    { id: "INV-2025-003", date: "7 Mar 2025", amount: 6499, status: "paid", method: "Visa ••4242" },
-    { id: "INV-2025-002", date: "7 Feb 2025", amount: 6499, status: "paid", method: "Visa ••4242" },
-    { id: "INV-2025-001", date: "7 Jan 2025", amount: 6499, status: "paid", method: "Net Banking" },
-  ]);
+  const trial = getTrialInfo(user.signupDate);
+  const isPaid = user.paid;
+  const currentPlanDef = PLANS.find(p => p.id === user.plan);
 
   const handleUpgrade = (plan) => {
     openRazorpay({
@@ -2203,15 +2199,14 @@ function BillingTab({ user }) {
       billing,
       user,
       onSuccess: (resp, pl, bl) => {
-        setActivePlan({ id: pl.id, name: pl.name, price: bl === "monthly" ? pl.price : pl.annual, renewsOn: "7 May 2026", cycle: bl });
+        setUser(u => ({ ...u, paid: true, plan: pl.id }));
         setShowUpgrade(false);
         notify(`✓ Upgraded to ${pl.name} plan successfully!`, "success");
       },
     });
   };
 
-  const currentPlan = PLANS.find(p => p.id === activePlan.id);
-  const planColor = currentPlan?.color || T.green;
+  const planColor = currentPlanDef?.color || T.blue;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -2221,17 +2216,24 @@ function BillingTab({ user }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-              <h3 className="heading" style={{ fontSize: 22, color: planColor }}>{activePlan.name} Plan</h3>
-              <Chip label="ACTIVE" color={T.green} bg={T.greenDim} size="lg" />
+              <h3 className="heading" style={{ fontSize: 22, color: planColor }}>
+                {isPaid ? (currentPlanDef?.name || "Pro") + " Plan" : "Free Trial"}
+              </h3>
+              <Chip label={isPaid ? "ACTIVE" : `${trial.daysLeft} DAYS LEFT`} color={isPaid ? T.green : trial.daysLeft <= 2 ? T.red : T.yellow} bg={isPaid ? T.greenDim : trial.daysLeft <= 2 ? T.redDim : T.yellowDim} size="lg" />
             </div>
             <p style={{ fontSize: 13.5, color: T.mutedText }}>
-              ₹{activePlan.price.toLocaleString("en-IN")}/month · Renews {activePlan.renewsOn}
+              {isPaid
+                ? `₹${(currentPlanDef?.price || 0).toLocaleString("en-IN")}/month · Thank you for subscribing!`
+                : `Trial started ${new Date(user.signupDate).toLocaleDateString("en-IN", { day:"numeric", month:"short", year:"numeric" })} · ${trial.expired ? "Expired" : `Expires in ${trial.daysLeft} day${trial.daysLeft !== 1 ? "s" : ""}`}`
+              }
             </p>
           </div>
-          <div style={{ textAlign: "right" }}>
-            <div className="heading" style={{ fontSize: 30, color: planColor }}>₹{activePlan.price.toLocaleString("en-IN")}</div>
-            <div style={{ fontSize: 11, color: T.muted }}>per month + GST</div>
-          </div>
+          {isPaid && (
+            <div style={{ textAlign: "right" }}>
+              <div className="heading" style={{ fontSize: 30, color: planColor }}>₹{(currentPlanDef?.price || 0).toLocaleString("en-IN")}</div>
+              <div style={{ fontSize: 11, color: T.muted }}>per month + GST</div>
+            </div>
+          )}
         </div>
 
         {/* USAGE METERS */}
@@ -2258,7 +2260,7 @@ function BillingTab({ user }) {
 
         <div style={{ display: "flex", gap: 10 }}>
           <Btn variant="green" size="sm" onClick={() => setShowUpgrade(true)}>Upgrade / Change Plan</Btn>
-          <Btn variant="ghost" size="sm" onClick={() => { openRazorpay({ plan: currentPlan, billing: activePlan.cycle, user, onSuccess: () => notify("Payment method updated", "success") }); }}>Update Payment Method</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => { if (currentPlanDef) openRazorpay({ plan: currentPlanDef, billing, user, onSuccess: () => notify("Payment method updated", "success") }); }}>Update Payment Method</Btn>
           <Btn variant="danger" size="sm" onClick={() => notify("To cancel, email support@workloadbalance.io — we'll process it within 24h.", "info")}>Cancel Plan</Btn>
         </div>
       </Card>
@@ -2281,7 +2283,7 @@ function BillingTab({ user }) {
             </div>
           ))}
         </div>
-        <Btn variant="ghost" size="sm" onClick={() => { openRazorpay({ plan: currentPlan, billing: activePlan.cycle, user, onSuccess: () => notify("New payment method added", "success") }); }}>
+        <Btn variant="ghost" size="sm" onClick={() => { if (currentPlanDef) openRazorpay({ plan: currentPlanDef, billing, user, onSuccess: () => notify("New payment method added", "success") }); else notify("Subscribe to a plan first.", "info"); }}>
           + Add payment method
         </Btn>
       </Card>
@@ -2334,7 +2336,7 @@ function BillingTab({ user }) {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
           {PLANS.map((plan, i) => {
             const price = plan.price ? (billing === "monthly" ? plan.price : plan.annual) : null;
-            const isCurrentPlan = plan.id === activePlan.id;
+            const isCurrentPlan = plan.id === user.plan && isPaid;
             return (
               <div key={i} style={{ padding: 20, border: `1.5px solid ${isCurrentPlan ? plan.color + "60" : T.border}`, borderRadius: 12, background: isCurrentPlan ? `${plan.color}06` : T.bgAlt, position: "relative" }}>
                 {isCurrentPlan && <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: plan.color, color: "#050708", fontSize: 9, fontWeight: 800, padding: "2px 10px", borderRadius: 10, fontFamily: "'Cabinet Grotesk',sans-serif" }}>CURRENT</div>}
@@ -2550,7 +2552,7 @@ function SettingsPage({ user, setUser }) {
           )}
 
           {tab === "billing" && (
-            <BillingTab user={user} />
+            <BillingTab user={user} setUser={setUser} />
           )}
 
           {tab === "security" && (
@@ -2647,7 +2649,7 @@ function PaywallScreen({ user, onPaid, onLogout }) {
           <p style={{ fontSize: 16, color: T.mutedText, maxWidth: 480, margin: "0 auto" }}>
             {trial.expired
               ? "Your data is safe. Subscribe to any plan to restore full access immediately."
-              : `You've used ${trial.daysUsed} of your 14 free days. Lock in your plan now and never lose access.`}
+              : `You've used ${trial.daysUsed} of your ${TRIAL_DAYS} free days. Lock in your plan now and never lose access.`}
           </p>
         </div>
 
